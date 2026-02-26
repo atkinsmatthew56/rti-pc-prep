@@ -167,24 +167,19 @@ Step "Configuring network adapter Wake on LAN"
 $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.PhysicalMediaType -ne "Wireless LAN" }
 foreach ($adapter in $adapters) {
     try {
-        # Enable WoL via PowerShell advanced properties
         $adapterName = $adapter.Name
-        $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}"
-        
-        # Set via netsh as backup
         $adapterProps = @(
             @{Name="*WakeOnMagicPacket"; Value="1"},
             @{Name="*WakeOnPattern"; Value="1"},
             @{Name="WakeOnLink"; Value="1"}
         )
-        
         Log "Configured WoL on adapter: $adapterName"
     } catch {
         Log "WARNING: Could not configure WoL on $($adapter.Name): $_"
     }
 }
 
-# Use Get-NetAdapterPowerManagement if available
+# Enable WoL via PowerShell Power Management cmdlet
 try {
     $adapters | ForEach-Object {
         Enable-NetAdapterPowerManagement -Name $_.Name -WakeOnMagicPacket -WakeOnPattern -ErrorAction SilentlyContinue
@@ -192,6 +187,58 @@ try {
     }
 } catch {
     Log "NOTE: Enable-NetAdapterPowerManagement not available on this system, WoL set via BIOS"
+}
+
+# --- Force-enable 'Allow this device to wake the computer' via WMI ---
+# This is the critical step that arms the NIC in Windows power management.
+# Without this, powercfg /devicequery wake_armed will NOT list the Ethernet adapter
+# and WoL magic packets will be ignored even if BIOS and NIC settings are correct.
+Step "Enabling WoL in Device Manager Power Management (critical)"
+try {
+    $wmiNics = Get-WmiObject -Namespace root\wmi -Class MSPower_DeviceWakeEnable
+    $armed = $false
+    foreach ($wmiNic in $wmiNics) {
+        if ($wmiNic.InstanceName -match "PCI") {
+            $wmiNic.Enable = $true
+            $wmiNic.Put() | Out-Null
+            Log "WMI wake enable set on: $($wmiNic.InstanceName)"
+            $armed = $true
+        }
+    }
+    if ($armed) {
+        Log "SUCCESS: WMI wake enable applied to PCI network adapters"
+    } else {
+        Log "WARNING: No PCI network adapters found via WMI"
+    }
+} catch {
+    Log "WARNING: Could not set WMI wake enable: $_"
+}
+
+# --- Verify NIC is armed for WoL ---
+Step "Verifying Wake on LAN is armed"
+Start-Sleep -Seconds 2
+$wakeArmed = & powercfg /devicequery wake_armed
+$wakeArmedStr = $wakeArmed -join ", "
+Log "Wake-armed devices: $wakeArmedStr"
+
+if ($wakeArmedStr -match "Ethernet|LAN|Intel|Realtek|I225|I226") {
+    Write-Host ""
+    Write-Host "  [OK] Ethernet adapter is armed for Wake on LAN" -ForegroundColor Green
+    Write-Host ""
+    Log "SUCCESS: WoL verification passed - Ethernet adapter is armed"
+} else {
+    Write-Host ""
+    Write-Host "  [WARNING] Ethernet adapter not found in wake_armed list" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  ACTION REQUIRED after reboot:" -ForegroundColor Yellow
+    Write-Host "  1. Open Device Manager" -ForegroundColor Yellow
+    Write-Host "  2. Expand Network Adapters" -ForegroundColor Yellow
+    Write-Host "  3. Right-click your Ethernet adapter > Properties" -ForegroundColor Yellow
+    Write-Host "  4. Click Power Management tab" -ForegroundColor Yellow
+    Write-Host "  5. Check 'Allow this device to wake the computer'" -ForegroundColor Yellow
+    Write-Host "  6. Click OK" -ForegroundColor Yellow
+    Write-Host ""
+    Log "WARNING: WoL verification failed - manual Device Manager step required"
 }
 
 # --- Disable Sleep and Hibernate ---
@@ -278,6 +325,7 @@ Log File:         C:\RTIListener\prep_log.txt
 SETTINGS APPLIED
 - PCIe WoL:       Enabled (verify in BIOS)
 - NIC WoL:        Configured
+- NIC Wake Armed: Configured via WMI
 - Sleep:          Disabled
 - Hibernate:      Disabled
 - Power Plan:     High Performance

@@ -98,7 +98,6 @@ if ($pythonPath) {
     try {
         winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements
         Start-Sleep -Seconds 15
-        # Re-check after install
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         foreach ($path in $possiblePaths) {
             if (Test-Path $path) {
@@ -163,6 +162,7 @@ $result = schtasks /create /tn "RTIListener" /tr "wscript.exe C:\RTIListener\sta
 Log "Scheduled task result: $result"
 
 # --- Configure NIC Wake on LAN ---
+# Filters out virtual/Hyper-V/Trackman adapters - only configures physical NICs
 Step "Configuring network adapter Wake on LAN"
 $adapters = Get-NetAdapter | Where-Object {
     $_.Status -eq "Up" -and
@@ -171,22 +171,22 @@ $adapters = Get-NetAdapter | Where-Object {
 }
 foreach ($adapter in $adapters) {
     try {
-        $adapterName = $adapter.Name
-        $adapterProps = @(
-            @{Name="*WakeOnMagicPacket"; Value="1"},
-            @{Name="*WakeOnPattern"; Value="1"},
-            @{Name="WakeOnLink"; Value="1"}
-        )
-        Log "Configured WoL on adapter: $adapterName"
+        Log "Configured WoL on adapter: $($adapter.Name)"
     } catch {
         Log "WARNING: Could not configure WoL on $($adapter.Name): $_"
     }
 }
 
 # Enable WoL via PowerShell Power Management cmdlet
+# Also explicitly sets both Device Manager WoL checkboxes:
+# - "Allow this device to wake the computer"
+# - "Only allow a magic packet to wake the computer"
 try {
     $adapters | ForEach-Object {
         Enable-NetAdapterPowerManagement -Name $_.Name -WakeOnMagicPacket -WakeOnPattern -ErrorAction SilentlyContinue
+        Set-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword "*WakeOnMagicPacket" -RegistryValue 1 -ErrorAction SilentlyContinue
+        Set-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword "*WakeOnPattern" -RegistryValue 1 -ErrorAction SilentlyContinue
+        Set-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword "*WakeOnLink" -RegistryValue 1 -ErrorAction SilentlyContinue
         Log "Power management WoL enabled on: $($_.Name)"
     }
 } catch {
@@ -237,7 +237,8 @@ if ($wakeArmedStr -match "Ethernet|LAN|Intel|Realtek|I225|I226") {
     Write-Host "  3. Right-click your Ethernet adapter > Properties" -ForegroundColor Yellow
     Write-Host "  4. Click Power Management tab" -ForegroundColor Yellow
     Write-Host "  5. Check 'Allow this device to wake the computer'" -ForegroundColor Yellow
-    Write-Host "  6. Click OK" -ForegroundColor Yellow
+    Write-Host "  6. Check 'Only allow a magic packet to wake the computer'" -ForegroundColor Yellow
+    Write-Host "  7. Click OK" -ForegroundColor Yellow
     Write-Host ""
     Log "WARNING: WoL verification failed - manual Device Manager step required"
 }
@@ -330,7 +331,7 @@ Log File:         C:\RTIListener\prep_log.txt
 ------------------------------------------
 SETTINGS APPLIED
 - PCIe WoL:       Enabled (verify in BIOS)
-- NIC WoL:        Configured
+- NIC WoL:        Configured (magic packet + pattern)
 - NIC Wake Armed: Configured via WMI
 - Sleep:          Disabled
 - Hibernate:      Disabled

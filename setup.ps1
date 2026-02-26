@@ -164,7 +164,11 @@ Log "Scheduled task result: $result"
 
 # --- Configure NIC Wake on LAN ---
 Step "Configuring network adapter Wake on LAN"
-$adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.PhysicalMediaType -ne "Wireless LAN" }
+$adapters = Get-NetAdapter | Where-Object {
+    $_.Status -eq "Up" -and
+    $_.PhysicalMediaType -ne "Wireless LAN" -and
+    $_.InterfaceDescription -notmatch "Hyper-V|Virtual|vEthernet|Loopback|Bluetooth|WAN Miniport|Trackman"
+}
 foreach ($adapter in $adapters) {
     try {
         $adapterName = $adapter.Name
@@ -190,9 +194,6 @@ try {
 }
 
 # --- Force-enable 'Allow this device to wake the computer' via WMI ---
-# This is the critical step that arms the NIC in Windows power management.
-# Without this, powercfg /devicequery wake_armed will NOT list the Ethernet adapter
-# and WoL magic packets will be ignored even if BIOS and NIC settings are correct.
 Step "Enabling WoL in Device Manager Power Management (critical)"
 try {
     $wmiNics = Get-WmiObject -Namespace root\wmi -Class MSPower_DeviceWakeEnable
@@ -284,9 +285,14 @@ Set-ItemProperty -Path $wuPath -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -T
 Set-ItemProperty -Path $wuPath -Name "AUOptions" -Value 3 -Type DWord
 Log "Windows Update auto-restart disabled"
 
-# --- Get MAC and IP ---
+# --- Get MAC and IP (physical adapters only - excludes Hyper-V, virtual, Trackman) ---
 Step "Collecting network information"
-$nic = Get-NetAdapter | Where-Object { $_.Status -eq "Up" -and $_.PhysicalMediaType -ne "Wireless LAN" } | Select-Object -First 1
+$nic = Get-NetAdapter | Where-Object {
+    $_.Status -eq "Up" -and
+    $_.PhysicalMediaType -ne "Wireless LAN" -and
+    $_.InterfaceDescription -notmatch "Hyper-V|Virtual|vEthernet|Loopback|Bluetooth|WAN Miniport|Trackman"
+} | Sort-Object Speed -Descending | Select-Object -First 1
+
 $macAddress = $nic.MacAddress
 $ipInfo = Get-NetIPAddress -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 | Select-Object -First 1
 $ipAddress = $ipInfo.IPAddress

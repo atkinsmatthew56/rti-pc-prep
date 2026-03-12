@@ -116,10 +116,11 @@ if ($pythonPath) {
     }
 }
 
-# --- Write listener.py ---
+# --- Write listener.py (threaded — required for RTI persistent TCP connections) ---
 Step "Writing RTI Listener script"
 $listenerCode = @'
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 import subprocess
 
 class ShutdownHandler(BaseHTTPRequestHandler):
@@ -140,8 +141,11 @@ class ShutdownHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    pass
+
 if __name__ == '__main__':
-    server = HTTPServer(('0.0.0.0', 9100), ShutdownHandler)
+    server = ThreadedHTTPServer(('0.0.0.0', 9100), ShutdownHandler)
     print('RTI Listener running on port 9100...')
     server.serve_forever()
 '@
